@@ -145,7 +145,7 @@ Mobile   : {user.get('mobile_number', 'N/A')}
 PlanType : {plan_type}
 Amount   : {formatted_amount}
 
-Approve here: http://localhost:3000/admin-login
+Approve here: https://scissorsproperties.com/admin-login
 """
     mail.send(msg)
 
