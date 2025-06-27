@@ -196,10 +196,11 @@ class AdminService:
         return True, f"User and Partner disabled status set to {disabled_status}"
 
     def _final_approval_and_send_credentials(self, user_id, email):
-        prefix = "50055"
+        prefix = "500550"
         suffix = "5"
-        last_user = self.auth_model.get_last_approved_user()
+        retry_limit = 5
 
+        last_user = self.auth_model.get_last_approved_user()
         if last_user and last_user.get("username", "").startswith(prefix):
             try:
                 middle = int(last_user["username"][6:8])
@@ -208,33 +209,33 @@ class AdminService:
         else:
             middle = 0
 
-        new_middle = str(middle + 1).zfill(2)
-        username = f"{prefix}{new_middle}{suffix}"
-        plain_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-        hashed_password = generate_password_hash(plain_password)
+        for _ in range(retry_limit):
+            new_middle = str(middle + 1).zfill(2)
+            username = f"{prefix}{new_middle}{suffix}"
+            plain_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            hashed_password = generate_password_hash(plain_password)
 
-        # ✅ Generate plots number
-        last_plot = self.auth_model.get_last_plot_number()
-        if last_plot:
-            plot_num = int(last_plot[1:]) + 1
-        else:
-            plot_num = 1
-        plots_value = f"P{plot_num:04d}"
+            last_plot = self.auth_model.get_last_plot_number()
+            plot_num = int(last_plot[1:]) + 1 if last_plot else 1
+            plots_value = f"P{plot_num:04d}"
 
-        update_data = {
-            "userStatus": "Accepted",
-            "username": username,
-            "password": hashed_password,
-            "credentialsSent": True,
-            "plots": plots_value
-        }
+            update_data = {
+                "userStatus": "Accepted",
+                "username": username,
+                "password": hashed_password,
+                "credentialsSent": True,
+                "plots": plots_value
+            }
 
-        result = self.auth_model.update_one({"_id": ObjectId(user_id)}, update_data)
+            try:
+                result = self.auth_model.update_one({"_id": ObjectId(user_id)}, update_data)
+                if result.modified_count > 0:
+                    send_credentials_email(username, plain_password, email)
+                    return response_with_code(200, "User fully approved and credentials sent")
+            except DuplicateKeyError:
+                middle += 1
+                continue
 
-        if result.modified_count > 0:
-            send_credentials_email(username, plain_password, email)
-            return response_with_code(200, "User fully approved, credentials and plots generated.")
-
-        return response_with_code(500, "Failed to approve user and set credentials.")
+        return response_with_code(500, "Failed to generate unique username after retries.")
 
 
