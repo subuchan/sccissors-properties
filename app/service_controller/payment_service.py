@@ -153,7 +153,6 @@ class PaymentService:
         if plan_type not in ['A', 'B']:
             return response_with_code(400, "Invalid plan type for full payment")
 
-        # ✅ Update payment status
         self.db.payment.update_one(
             {"userId": ObjectId(user_id)},
             {
@@ -164,15 +163,14 @@ class PaymentService:
             }
         )
 
-        # ✅ If credentials already sent
         if self.auth_model.has_sent_credentials(user_id):
             return response_with_code(200, "Payment marked as complete. Credentials already sent.")
 
-        # ✅ Generate unique username
-        prefix = "50055"
+        prefix = "500550"
         suffix = "5"
-        last_user = self.auth_model.get_last_approved_user()
+        retry_limit = 5
 
+        last_user = self.auth_model.get_last_approved_user()
         if last_user and last_user.get("username", "").startswith(prefix):
             try:
                 middle = int(last_user["username"][6:8])
@@ -181,29 +179,32 @@ class PaymentService:
         else:
             middle = 0
 
-        new_middle = str(middle + 1).zfill(2)
-        username = f"{prefix}{new_middle}{suffix}"
-        plain_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-        hashed_password = generate_password_hash(plain_password)
+        for _ in range(retry_limit):
+            new_middle = str(middle + 1).zfill(2)
+            username = f"{prefix}{new_middle}{suffix}"
+            plain_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            hashed_password = generate_password_hash(plain_password)
 
-        # ✅ Update user collection using self.db
-        result = self.db.users.update_one(
-            {"_id": ObjectId(user_id)},
-            {
-                "$set": {
-                    "username": username,
-                    "password": hashed_password,
-                    "credentialsSent": True,
-                    "updatedAt": datetime.utcnow()
-                }
-            }
-        )
+            try:
+                result = self.db.users.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {
+                        "$set": {
+                            "username": username,
+                            "password": hashed_password,
+                            "credentialsSent": True,
+                            "updatedAt": datetime.utcnow()
+                        }
+                    }
+                )
+                if result.modified_count > 0:
+                    send_credentials_email(username, plain_password, user['email'])
+                    return response_with_code(200, "Payment complete and credentials sent")
+            except DuplicateKeyError:
+                middle += 1
+                continue
 
-        if result.modified_count > 0:
-            send_credentials_email(username, plain_password, user['email'])
-            return response_with_code(200, "Payment complete and credentials sent")
-
-        return response_with_code(500, "Failed to update user")
+        return response_with_code(500, "Failed to generate unique username after retries.")
 
 
 
